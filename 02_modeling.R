@@ -10,11 +10,11 @@ library(geosphere)
 setwd("/Users/masonyoungblood/Documents/Work/Spring_2025/Catbirds/catbird_analysis")
 
 #load in data
-unit_df <- read.csv("data/unit_features_with_entropy_fixed.csv")
-context <- read.csv("data/TweetyNoLongCleaned.csv")
-sex <- read.csv("data/Final_sexing.csv")
-data <- read.csv("data/catbird_clusts_feats.csv")
-locations <- read.csv("data/All_song_posts.csv")
+unit_df <- read.csv("data/unit_features.csv")
+context <- read.csv("data/tweetynet_parsing.csv")
+sex <- read.csv("data/sexing.csv")
+data <- read.csv("data/clusters_features.csv")
+locations <- read.csv("data/lat_lon.csv")
 
 #reformat filenames
 unit_df$filename_base <- unit_df$filename
@@ -216,10 +216,10 @@ library(dtw)
 setwd("/Users/masonyoungblood/Documents/Work/Spring_2025/Catbirds/catbird_analysis")
 
 #load in data
-context <- read.csv("data/TweetyNoLongCleaned.csv")
-sex <- read.csv("data/Final_sexing.csv")
-data <- read.csv("data/catbird_clusts_feats.csv")
-locations <- read.csv("data/All_song_posts.csv")
+context <- read.csv("data/tweetynet_parsing.csv")
+sex <- read.csv("data/sexing.csv")
+data <- read.csv("data/clusters_features.csv")
+locations <- read.csv("data/lat_lon.csv")
 
 #restructure data for analysis
 data$duration  <- data$offset - data$onset
