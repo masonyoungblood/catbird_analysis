@@ -116,7 +116,7 @@ save(syl_dist_w_in_data, file = "proc/syl_dist_w_in_data.RData")
 
 #load data and libraries
 library(brms)
-load("proc_data/syl_features.RData")
+load("proc/syl_features.RData")
 
 #set priors for more efficient sampling
 syl_context_prior <- c(
@@ -270,7 +270,7 @@ context_data <- do.call(rbind, mclapply(songs, function(x){
   }
 }, mc.cores = detectCores()-1))
 context_data$sex <- ifelse(sex$Sex[match(context_data$individual, sex$ColorID)] == "M", 1, 0)
-save(context_data, file = "proc_data/song_contexts.RData")
+save(context_data, file = "proc/song_contexts.RData")
 
 #get metadata object, and split features up into a matrix per song, as a list
 first_song_indices <- !duplicated(data$song)
@@ -422,3 +422,244 @@ save(song_dist_w_in_model, file = "models/song_dists_w_in.RData")
 
 #example posterior predictive check of songs distances with x number of years of distance
 hist(rowMeans(posterior_predict(song_dist_w_in_model, newdata = data.frame(year_dist = 2, individual = unique(song_dist_w_in_data$individual)))), breaks = 100)
+
+# PLOT --------------------------------------------------------------------
+
+#load models and libraries
+library(brms)
+library(tidyverse)
+library(cowplot)
+library(ggtext)
+library(ggh4x)
+setwd("/Users/masonyoungblood/Documents/Work/Spring_2025/Catbirds/catbird_analysis")
+load("models/syl_features_context.RData")
+load("models/syl_features_sex.RData")
+load("models/syl_dists.RData")
+load("models/syl_dists_w_in.RData")
+load("models/song_context.RData")
+load("models/song_sex.RData")
+load("models/song_dists.RData")
+load("models/song_dists_w_in.RData")
+
+#color definitions
+sig_fill  <- c("positive" = "#2166AC", "negative" = "#B2182B", "ns" = "gray80")
+sig_color <- c("positive" = "#174F85", "negative" = "#8B1023", "ns" = "gray50")
+blue_hex  <- "#2166AC"
+red_hex   <- "#B2182B"
+
+#add 95% CI significance flag per variable
+add_sig <- function(df){
+  ci <- df %>%
+    group_by(variable) %>%
+    summarize(lo = quantile(value, 0.025), hi = quantile(value, 0.975), .groups = "drop") %>%
+    mutate(sig = case_when(lo > 0 ~ "positive", hi < 0 ~ "negative", TRUE ~ "ns"))
+  left_join(df, ci %>% select(variable, sig), by = "variable")
+}
+
+#per-strip colored backgrounds via ggh4x
+make_strip <- function(df){
+  vars <- df %>% distinct(variable, sig) %>% arrange(variable)
+  bg_list <- lapply(vars$sig, function(s){
+    element_rect(fill = switch(s, positive = blue_hex, negative = red_hex, "grey85"),
+                 colour = "grey20")
+  })
+  txt_list <- lapply(vars$sig, function(s){
+    element_text(colour = if (s != "ns") "white" else "black",
+                 face   = if (s != "ns") "bold"  else "plain")
+  })
+  strip_themed(background_y = bg_list, text_y = txt_list)
+}
+
+#for the title have normal spacing, aligned to the panel
+make_comp_title <- function(header, left, right, blue = blue_hex, red = red_hex){
+  paste0(
+    header, "<br>",
+    "<b style='color:", blue, "'>", left, "</b>",
+    " vs. ",
+    "<b style='color:", red,  "'>", right, "</b>"
+  )
+}
+
+#create the titles
+title_theme <- theme(
+  plot.title = element_textbox_simple(
+    lineheight = 1,
+    margin = margin(t = 0, r = 0, b = 4, l = -17),
+    padding = margin(0, 0, 0, 0),
+    halign = 0,
+    family = "Apfel Grotezk Fett"
+  ),
+  plot.title.position = "panel"  # start at the left edge of the panel
+)
+sex_title   <- make_comp_title("SEX",     "Male (+)",      "female (-)")
+intra_title <- make_comp_title("CONTEXT", "Intrapair (+)", "advertisement (-)")
+resp_title  <- make_comp_title("CONTEXT", "Response (+)",  "advertisement (-)")
+
+#create syllable-level sex plot
+data <- pivot_longer(as_draws_df(syl_sex_model), cols = everything(), names_to = "variable")
+data <- data[which(data$variable %in% c("b_duration", "b_min_freq", "b_max_freq", "b_bandwidth", "b_concavity", "b_excursion", "b_entropy")), ]
+data$variable <- str_to_sentence(gsub("_", ". ", gsub("b_", "", data$variable)))
+data <- add_sig(data)
+a <- ggplot(data, aes(x = value, fill = sig, color = sig)) + 
+  geom_density(alpha = 0.4) + 
+  facet_wrap2(~ variable, ncol = 1, scales = "free_y", strip.position = "left",
+              strip = make_strip(data)) + 
+  geom_vline(xintercept = 0, lty = 2) + 
+  scale_fill_manual(values = sig_fill, guide = "none") +
+  scale_color_manual(values = sig_color, guide = "none") +
+  scale_x_continuous(limits = c(-1, 1), expand = c(0, 0)) + 
+  scale_y_continuous(n.breaks = 2.35) + 
+  xlab("Estimate") + ylab("Density") + 
+  ggtitle(sex_title) + 
+  theme_linedraw(base_family = "Apfel Grotezk") + 
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    plot.margin = margin(5.5, 5.5, 5.5, 6.5)  # avoid left-edge clipping
+  ) +
+  title_theme
+
+#create first syllable-level context plot
+data <- pivot_longer(as_draws_df(syl_context_model), cols = everything(), names_to = "variable")
+data <- data[grep("b_", data$variable), ]
+data <- data[grep("_Intercept", data$variable, invert = TRUE), ]
+data_intra <- data[grep("_muIntrapair_", data$variable), ]
+data_resp  <- data[grep("_muTerrResponse_", data$variable), ]
+data_intra$variable <- str_to_sentence(gsub("_", ". ", gsub("b_muIntrapair_", "", data_intra$variable)))
+data_resp$variable  <- str_to_sentence(gsub("_", ". ", gsub("b_muTerrResponse_", "", data_resp$variable)))
+data_intra <- add_sig(data_intra)
+b <- ggplot(data_intra, aes(x = value, fill = sig, color = sig)) + 
+  geom_density(alpha = 0.4) + 
+  facet_wrap2(~ variable, ncol = 1, scales = "free_y", strip.position = "left",
+              strip = make_strip(data_intra)) + 
+  geom_vline(xintercept = 0, lty = 2) + 
+  scale_fill_manual(values = sig_fill, guide = "none") +
+  scale_color_manual(values = sig_color, guide = "none") +
+  scale_x_continuous(limits = c(-1, 1), expand = c(0, 0)) + 
+  scale_y_continuous(n.breaks = 2.55) + 
+  xlab("Estimate") + ylab("Density") + 
+  ggtitle(intra_title) + 
+  theme_linedraw(base_family = "Apfel Grotezk") + 
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    plot.margin = margin(5.5, 5.5, 5.5, 6.5)
+  ) +
+  title_theme
+
+#create second syllable-level context plot
+data_resp <- add_sig(data_resp)
+c <- ggplot(data_resp, aes(x = value, fill = sig, color = sig)) + 
+  geom_density(alpha = 0.4) + 
+  facet_wrap2(~ variable, ncol = 1, scales = "free_y", strip.position = "left",
+              strip = make_strip(data_resp)) + 
+  geom_vline(xintercept = 0, lty = 2) + 
+  scale_fill_manual(values = sig_fill, guide = "none") +
+  scale_color_manual(values = sig_color, guide = "none") +
+  scale_x_continuous(limits = c(-1, 1), expand = c(0, 0)) + 
+  scale_y_continuous(n.breaks = 2.8) + 
+  xlab("Estimate") + ylab("Density") + 
+  ggtitle(resp_title) + 
+  theme_linedraw(base_family = "Apfel Grotezk") + 
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    plot.margin = margin(5.5, 5.5, 5.5, 6.5)
+  ) +
+  title_theme
+
+#combine into combined syllable-level plot
+panel_1 <- plot_grid(
+  ggplot(NULL) + ggtitle("SYLLABLE-LEVEL") +
+    theme_void(base_family = "Apfel Grotezk Fett") +
+    theme(plot.title = element_textbox_simple(margin = margin(0, 0, 2, 0), halign = 0)),
+  plot_grid(a, b, c, nrow = 1, labels = c("A)", "B)", ""), align = "hv"),
+  nrow = 2, rel_heights = c(0.05, 1)
+)
+
+#create song-level sex plot
+data <- pivot_longer(as_draws_df(song_sex_model), cols = everything(), names_to = "variable")
+data <- data[which(data$variable %in% c("b_scalepath", "b_scalelength", "b_scalerate")), ]
+data$variable <- str_to_sentence(gsub("b_scale", "", data$variable))
+data <- add_sig(data)
+a <- ggplot(data, aes(x = value, fill = sig, color = sig)) + 
+  geom_density(alpha = 0.4) + 
+  facet_wrap2(~ variable, ncol = 1, scales = "free_y", strip.position = "left",
+              strip = make_strip(data)) + 
+  geom_vline(xintercept = 0, lty = 2) + 
+  scale_fill_manual(values = sig_fill, guide = "none") +
+  scale_color_manual(values = sig_color, guide = "none") +
+  scale_x_continuous(limits = c(-1, 1), expand = c(0, 0)) + 
+  scale_y_continuous(n.breaks = 2.35) + 
+  xlab("Estimate") + ylab("Density") + 
+  ggtitle(sex_title) + 
+  theme_linedraw(base_family = "Apfel Grotezk") + 
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    plot.margin = margin(5.5, 5.5, 5.5, 6.5)
+  ) +
+  title_theme
+
+#create first song-level context plot
+data <- pivot_longer(as_draws_df(song_context_model), cols = everything(), names_to = "variable")
+data <- data[grep("b_", data$variable), ]
+data <- data[grep("_Intercept", data$variable, invert = TRUE), ]
+data_intra <- data[grep("_muIntrapair_", data$variable), ]
+data_resp  <- data[grep("_muTerrResponse_", data$variable), ]
+data_intra$variable <- str_to_sentence(gsub("b_muIntrapair_scale", "", data_intra$variable))
+data_resp$variable  <- str_to_sentence(gsub("b_muTerrResponse_scale", "", data_resp$variable))
+data_intra <- add_sig(data_intra)
+b <- ggplot(data_intra, aes(x = value, fill = sig, color = sig)) + 
+  geom_density(alpha = 0.4) + 
+  facet_wrap2(~ variable, ncol = 1, scales = "free_y", strip.position = "left",
+              strip = make_strip(data_intra)) + 
+  geom_vline(xintercept = 0, lty = 2) + 
+  scale_fill_manual(values = sig_fill, guide = "none") +
+  scale_color_manual(values = sig_color, guide = "none") +
+  scale_x_continuous(limits = c(-2.5, 2.5), expand = c(0, 0)) + 
+  scale_y_continuous(n.breaks = 2.55) + 
+  xlab("Estimate") + ylab("Density") + 
+  ggtitle(intra_title) + 
+  theme_linedraw(base_family = "Apfel Grotezk") + 
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    plot.margin = margin(5.5, 5.5, 5.5, 6.5)
+  ) +
+  title_theme
+
+#create second song-level context plot
+data_resp <- add_sig(data_resp)
+c <- ggplot(data_resp, aes(x = value, fill = sig, color = sig)) + 
+  geom_density(alpha = 0.4) + 
+  facet_wrap2(~ variable, ncol = 1, scales = "free_y", strip.position = "left",
+              strip = make_strip(data_resp)) + 
+  geom_vline(xintercept = 0, lty = 2) + 
+  scale_fill_manual(values = sig_fill, guide = "none") +
+  scale_color_manual(values = sig_color, guide = "none") +
+  scale_x_continuous(limits = c(-2.5, 2.5), expand = c(0, 0)) + 
+  scale_y_continuous(n.breaks = 2.8) + 
+  xlab("Estimate") + ylab("Density") + 
+  ggtitle(resp_title) + 
+  theme_linedraw(base_family = "Apfel Grotezk") + 
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    plot.margin = margin(5.5, 5.5, 5.5, 6.5)
+  ) +
+  title_theme
+
+#combine into combined song-level plot
+panel_2 <- plot_grid(
+  ggplot(NULL) + ggtitle("SONG-LEVEL") +
+    theme_void(base_family = "Apfel Grotezk Fett") +
+    theme(plot.title = element_textbox_simple(margin = margin(0, 0, 2, 0), halign = 0)),
+  plot_grid(a, b, c, nrow = 1, labels = c("C)", "D)", ""), align = "hv"),
+  nrow = 2, rel_heights = c(0.1, 1)
+)
+
+#export
+png("imgs/posteriors.png", width = 10.2, height = 10, units = "in", res = 300)
+plot_grid(panel_1, panel_2, nrow = 2, rel_heights = c(7, 3.8), label_fontfamily = "Apfel Grotezk Fett")
+dev.off()
